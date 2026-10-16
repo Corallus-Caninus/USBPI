@@ -1,12 +1,19 @@
-# USBPI — Raspberry Pi 3B as a zero-touch USB/IP appliance
+# USBPI
 
-Turn a Raspberry Pi 3 Model B into a dedicated **USB-over-IP server**: plug in
-the boot medium (microSD card *or* USB drive), the USB device(s), and Ethernet,
-power it on, and every USB device is exported on the LAN. There is no desktop,
-no login, no monitor — the Pi only forwards USB.
+> ## Turn your Raspberry Pi — **especially the Pi 3B and other older Pis** — into a **USB-to-Ethernet converter.**
 
-On a Linux client the exported devices can then be attached locally, where they
-show up as ordinary USB devices (keyboards, mice, serial adapters, …).
+Flash one image, plug in your USB devices + Ethernet, power on — and the Pi
+becomes a dedicated **USB-over-IP appliance** on your LAN. No desktop, no
+monitor, no login: the Pi only forwards USB.
+
+Old hardware is the point. A dusty **Pi 3B** (or any older Pi with Ethernet)
+is exactly the right machine for this job: give it a keyboard, mouse, serial
+dongle or other USB device on one end, and it appears on any Linux machine on
+the network as if it were plugged in locally.
+
+On the client the exported devices show up as ordinary USB devices (keyboards,
+mice, serial adapters, …) and are re-attached automatically whenever the Pi or
+a device comes back.
 
 Wireless is not used; Ethernet only. Wi-Fi/Bluetooth stay enabled but idle.
 
@@ -16,15 +23,16 @@ Wireless is not used; Ethernet only. Wi-Fi/Bluetooth stay enabled but idle.
 
 ## Quick start
 
-You need a Raspberry Pi 3B, a microSD card (or USB drive), Ethernet, and a
-Linux machine to connect from. The client-side tooling is built for NixOS, but
-the attach scripts work on any Linux with `usbip` available.
+You need a Raspberry Pi (the **Pi 3B** and other older Pis are ideal — see
+[Caveats](#caveats)), a microSD card (or USB drive), Ethernet, and a Linux
+machine to connect from. The client-side tooling is built for NixOS, but the
+attach scripts work on any Linux with `usbip` available.
 
 **1. Build the image and flash it** — one command. If no device is given you get
 a menu of attached drives:
 
 ```sh
-git clone https://github.com/<you>/USBPI && cd USBPI
+git clone https://github.com/Corallus-Caninus/USBPI && cd USBPI
 ./flash.sh /dev/sdX      # or just ./flash.sh to pick from a menu
 ```
 
