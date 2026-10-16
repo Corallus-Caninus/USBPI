@@ -68,6 +68,12 @@ pick_device() {
 # ---------------------------------------------------------------------------
 needs_build() {
     [ -f "$img" ] || return 0
+    # build options passed as env (USBPI_LOCKDOWN, USBPI_IMAGE_URL, ...) need a
+    # fresh build to take effect, even though no input file changed
+    local v
+    for v in USBPI_LOCKDOWN USBPI_IMAGE_URL USBPI_SSH_KEY USBPI_BOOT_MOUNT; do
+        [ -n "$(printenv "$v" 2>/dev/null)" ] && return 0
+    done
     [ "$root/scripts/build-image.sh" -nt "$img" ] && return 0
     [ -n "$(find "$root/server" -newer "$img" -print -quit 2>/dev/null)" ] && return 0
     return 1
