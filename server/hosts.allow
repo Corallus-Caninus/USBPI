@@ -1,0 +1,12 @@
+# Only these networks may use the exported USB devices.
+# usbipd has no authentication; TCP wrappers are enforced (Debian builds usbip
+# with libwrap0).  If your LAN uses a different range, edit this file in
+# server/hosts.allow and rebuild the image, or append to /etc/hosts.allow via
+# the break-glass SSH account.
+usbipd: 127.0.0.1/255.255.255.255
+usbipd: 192.168.0.0/255.255.0.0
+usbipd: 10.0.0.0/255.0.0.0
+usbipd: 172.16.0.0/255.240.0.0
+usbipd: [::1]/128
+usbipd: [fe80::]/10
+usbipd: [fd00::]/8

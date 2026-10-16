@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically export local USB devices over USB/IP
+
+[Timer]
+OnBootSec=5s
+OnUnitActiveSec=5s
+AccuracySec=1s
+Unit=usbip-autobind.service
+
+[Install]
+WantedBy=timers.target

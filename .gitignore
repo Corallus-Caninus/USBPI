@@ -1,0 +1,16 @@
+# build artifacts
+build/
+*.part
+usbip-pi.img
+usbip-pi.img.sha256
+
+# secrets / per-machine state
+CREDENTIALS.txt
+
+# nix
+result
+result-*
+
+# editor/OS noise
+*.swp
+.DS_Store

@@ -1,0 +1,14 @@
+[Unit]
+Description=One-time USB/IP provisioning (install usbip userspace and enable the server)
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=!/var/lib/.usbip-provisioned
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/usbip-provision.sh
+RemainAfterExit=yes
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target
