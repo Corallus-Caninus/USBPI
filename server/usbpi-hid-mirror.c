@@ -1055,6 +1055,19 @@ static int setup_gadget(struct device *d)
 
 fail:
     log_err("%s: gadget setup failed, leaving on usbip-host", d->busid);
+    for (i = 0; i < d->nifaces; i++) {
+        f = &d->ifaces[i];
+        if (f->g_fd >= 0) {
+            close(f->g_fd);
+            f->g_fd = -1;
+        }
+        free(f->q);
+        f->q = NULL;
+        free(f->qlen);
+        f->qlen = NULL;
+        f->qcount = 0;
+        f->qhead = 0;
+    }
     gadget_remove_tree(d, created);
     d->failed = true;
     d->retry_after = time(NULL) + RETRY_FAILED_SEC;
