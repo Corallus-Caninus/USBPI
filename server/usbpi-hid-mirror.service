@@ -1,0 +1,17 @@
+[Unit]
+Description=USBPI buffered HID mirror (configfs HID gadgets over usbip-vudc)
+Documentation=https://github.com/Corallus-Caninus/USBPI
+ConditionPathExists=/usr/sbin/usbip
+ConditionPathExists=/usr/local/sbin/usbpi-hid-mirror
+
+[Service]
+Type=simple
+ExecStartPre=/sbin/modprobe libcomposite
+ExecStartPre=-/sbin/modprobe usbip-vudc
+ExecStartPre=/bin/sh -c 'mountpoint -q /sys/kernel/config || mount -t configfs none /sys/kernel/config'
+ExecStart=/usr/local/sbin/usbpi-hid-mirror -c /etc/usbpi/hid-mirror.conf
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

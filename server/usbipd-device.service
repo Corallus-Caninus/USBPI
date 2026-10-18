@@ -1,0 +1,15 @@
+[Unit]
+Description=USB/IP server daemon in device mode (HID gadget export, port 3241)
+Documentation=man:usbipd(8)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/usr/sbin/usbipd
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/usbipd -e -t 3241
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -8,16 +8,23 @@
 # literal IP), so it survives the Pi powering off/on, moving networks, changing
 # IP, and devices being replugged.
 #
+# HID devices are exported by the Pi's buffered HID mirror through a second
+# daemon in device mode (default port 3241).  Both ports are watched unless
+# USBIP_GADGET=0.
+#
 #   sudo ./usbip-sync.sh [server]
 #
 # Environment:
-#   USBIP_SERVER      server name/IP (default: usbip-pi.lan)
-#   USBIP_CANDIDATES  extra fallback names/IPs to try (default: usbip-pi.local)
-#   USBIP_ALL         1 = forward every exported device
-#   USBIP_VIDPID      pick a single device by vendor:product (e.g. 413c:2113)
-#   USBIP_BUSID       pick a single device by a fixed busid
-#   USBIP_INTERVAL    seconds between checks (default 5)
-#   USBIP_ONCE        1 = run a single pass and exit
+#   USBIP_SERVER       server name/IP (default: usbip-pi.lan)
+#   USBIP_CANDIDATES   extra fallback names/IPs to try (default: usbip-pi.local)
+#   USBIP_ALL          1 = forward every exported device
+#   USBIP_VIDPID       pick a single device by vendor:product (e.g. 413c:2113)
+#   USBIP_BUSID        pick a single device by a fixed busid
+#   USBIP_PORT         main USB/IP port (default 3240)
+#   USBIP_GADGET       1 = also attach buffered HID gadgets (default 1)
+#   USBIP_GADGET_PORT  device-mode daemon port (default 3241)
+#   USBIP_INTERVAL     seconds between checks (default 5)
+#   USBIP_ONCE         1 = run a single pass and exit
 #
 # For boot-time persistence use the NixOS module (client/usbip-client.nix),
 # or just run ../connect.sh.
@@ -29,6 +36,9 @@ VIDPID="${USBIP_VIDPID:-}"
 BUSID_WANT="${USBIP_BUSID:-}"
 ALL="${USBIP_ALL:-}"
 INTERVAL="${USBIP_INTERVAL:-5}"
+PORT="${USBIP_PORT:-3240}"
+GADGET="${USBIP_GADGET:-1}"
+GADGET_PORT="${USBIP_GADGET_PORT:-3241}"
 
 # consecutive failed lookups before we treat the server as gone and clear any
 # stale local attachment
@@ -41,6 +51,8 @@ LAST_IP_FILE="${USBIP_LAST_IP_FILE:-/var/lib/usbip-sync.last-ip}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 log() { printf '%s usbip-sync: %s\n' "$(date '+%F %T')" "$*"; }
+
+gadget_enabled() { [ "$GADGET" != "0" ]; }
 
 # --- locate (or build) the usbip binary --------------------------------------
 # The build keeps a GC root at <repo>/result so it is not garbage-collected.
@@ -111,7 +123,7 @@ resolve_server() {
 }
 
 port_open() {
-    timeout 2 bash -c "exec 3<>/dev/tcp/$1/3240" 2>/dev/null
+    timeout 2 bash -c "exec 3<>/dev/tcp/$1/$PORT" 2>/dev/null
 }
 
 remember_ip() {
@@ -158,26 +170,73 @@ clear_ports() {
     done
 }
 
-remote_busids() {
-    "$USBIP" list -r "$1" 2>/dev/null | sed -n 's/^[[:space:]]*\([0-9][0-9.-]*\):.*/\1/p'
+# remote listings are human-readable; real devices show busids like "1-1.3",
+# buffered HID gadgets like "usbip-vudc.0"
+BUSID_RE='[0-9][0-9.-]*\|usbip-vudc\.[0-9]*'
+
+list_remote() { # host port
+    "$USBIP" --tcp-port "$2" list -r "$1" 2>/dev/null
 }
 
-pick_busid() {
-    local target="$1" listing
-    if [ -n "$BUSID_WANT" ]; then
-        printf '%s\n' "$BUSID_WANT"
-        return 0
-    fi
-    listing="$("$USBIP" list -r "$target" 2>/dev/null)"
-    # remote listing is human-readable, e.g.:
-    #   "1-1.3: Dell Computer Corp. : KB216 Wired Keyboard (413c:2113)"
+remote_busids() { # host port
+    list_remote "$1" "$2" | sed -n "s/^[[:space:]]*\\(${BUSID_RE}\\):.*/\\1/p"
+}
+
+pick_from_listing() { # listing
+    local listing="$1"
     if [ -n "$VIDPID" ]; then
         printf '%s\n' "$listing" \
-            | sed -n "s/^[[:space:]]*\([0-9][0-9.-]*\):.*(${VIDPID})[[:space:]]*$/\1/p" | head -n1
+            | sed -n "s/^[[:space:]]*\\(${BUSID_RE}\\):.*(${VIDPID})[[:space:]]*$/\\1/p" | head -n1
     else
         printf '%s\n' "$listing" \
-            | sed -n 's/^[[:space:]]*\([0-9][0-9.-]*\):.*/\1/p' | head -n1
+            | sed -n "s/^[[:space:]]*\\(${BUSID_RE}\\):.*/\\1/p" | head -n1
     fi
+}
+
+# pick a device to attach, searching the main port first and then the buffered
+# HID gadget port; prints "<port> <busid>"
+pick_remote() { # host
+    local h="$1" listing b
+    if [ -n "$BUSID_WANT" ]; then
+        case "$BUSID_WANT" in
+            usbip-vudc.*) printf '%s %s\n' "$GADGET_PORT" "$BUSID_WANT" ;;
+            *)            printf '%s %s\n' "$PORT" "$BUSID_WANT" ;;
+        esac
+        return 0
+    fi
+    listing="$(list_remote "$h" "$PORT")" || listing=""
+    b="$(pick_from_listing "$listing")"
+    if [ -n "$b" ]; then printf '%s %s\n' "$PORT" "$b"; return 0; fi
+    if gadget_enabled; then
+        listing="$(list_remote "$h" "$GADGET_PORT")" || listing=""
+        b="$(pick_from_listing "$listing")"
+        if [ -n "$b" ]; then printf '%s %s\n' "$GADGET_PORT" "$b"; return 0; fi
+    fi
+    return 1
+}
+
+attach_one() { # host port busid
+    local args=()
+    [ "$2" != "3240" ] && args=(--tcp-port "$2")
+    "$USBIP" "${args[@]}" attach -r "$1" -b "$3"
+}
+
+# attach every device a port currently exports; returns 0 if at least one
+# attach succeeded
+attach_port() { # host port
+    local t="$1" p="$2" b busids found=""
+    busids="$(remote_busids "$t" "$p")"
+    [ -n "$busids" ] || return 1
+    for b in $busids; do
+        log "attaching $b from $t:$p"
+        if attach_one "$t" "$p" "$b"; then
+            log "attached $b from $t:$p"
+            found=1
+        else
+            log "attach failed ($b from $t:$p); will retry"
+        fi
+    done
+    [ -n "$found" ]
 }
 
 # --- main loop ---------------------------------------------------------------
@@ -208,38 +267,35 @@ while true; do
         down=0
 
         if [ -n "$ALL" ]; then
-            busids="$(remote_busids "$target")"
-            if [ -z "$busids" ]; then
+            any=""
+            attach_port "$target" "$PORT" && any=1
+            if gadget_enabled; then
+                attach_port "$target" "$GADGET_PORT" && any=1
+            fi
+            if [ -z "$any" ]; then
                 [ "$state" = "idle" ] || log "no devices exported by $target yet"
                 state="idle"
             else
-                for b in $busids; do
-                    log "attaching $target busid $b"
-                    if "$USBIP" attach -r "$target" -b "$b"; then
-                        log "attached $target busid $b"
-                    else
-                        log "attach failed ($b); will retry"
-                    fi
-                done
                 state="attached"
             fi
         elif is_attached "$target"; then
             [ "$state" = "attached" ] || log "attached via $target"
             state="attached"
         else
-            busid="$(pick_busid "$target")"
-            if [ -z "$busid" ]; then
-                [ "$state" = "no-device" ] || log "$target reachable, requested device not exported yet"
-                state="no-device"
-            else
-                log "attaching $target busid $busid"
-                if "$USBIP" attach -r "$target" -b "$busid"; then
-                    log "attached $target busid $busid"
+            if picked="$(pick_remote "$target")"; then
+                port="${picked%% *}"
+                busid="${picked#* }"
+                log "attaching $busid from $target:$port"
+                if attach_one "$target" "$port" "$busid"; then
+                    log "attached $busid from $target:$port"
                     state="attached"
                 else
                     [ "$state" = "attach-failed" ] || log "attach failed; will keep retrying"
                     state="attach-failed"
                 fi
+            else
+                [ "$state" = "no-device" ] || log "$target reachable, requested device not exported yet"
+                state="no-device"
             fi
         fi
     fi

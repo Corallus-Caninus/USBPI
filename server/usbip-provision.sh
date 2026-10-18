@@ -45,6 +45,8 @@ echo "usbip installed: $(dpkg-query -W usbip 2>/dev/null || echo unknown)"
 systemctl daemon-reload
 systemctl enable --now usbipd.service
 systemctl enable --now usbip-autobind.timer
+systemctl enable --now usbipd-device.service || true
+systemctl enable --now usbpi-hid-mirror.service || true
 /usr/local/sbin/usbip-bind-all.sh || true
 
 # --- mark done --------------------------------------------------------------

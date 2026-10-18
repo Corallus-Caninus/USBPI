@@ -87,6 +87,18 @@ in
       description = "Attach every device the server exports instead of a single one.";
     };
 
+    gadget = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Also attach the buffered HID gadgets exported by the server's HID mirror (device-mode usbipd).";
+    };
+
+    gadgetPort = lib.mkOption {
+      type = lib.types.port;
+      default = 3241;
+      description = "TCP port of the server's device-mode usbipd that exports buffered HID gadgets.";
+    };
+
     interval = lib.mkOption {
       type = lib.types.ints.positive;
       default = 10;
@@ -111,6 +123,8 @@ in
         USBIP_VIDPID = lib.optionalString (cfg.vidPid != null) cfg.vidPid;
         USBIP_ALL = lib.optionalString cfg.all "1";
         USBIP_INTERVAL = toString cfg.interval;
+        USBIP_GADGET = if cfg.gadget then "1" else "0";
+        USBIP_GADGET_PORT = toString cfg.gadgetPort;
       };
       serviceConfig = {
         Type = "simple";

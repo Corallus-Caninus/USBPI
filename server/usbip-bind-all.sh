@@ -12,6 +12,7 @@ set -u
 
 USBPIP=/usr/sbin/usbip
 BOUND_DIR=/sys/bus/usb/drivers/usbip-host
+MIRROR_CLAIM=/run/usbpi-hid-mirror/claimed
 
 modprobe usbip-host 2>/dev/null || true
 [ -x "$USBPIP" ] || { echo "usbip not installed yet"; exit 0; }
@@ -24,6 +25,16 @@ for dev in /sys/bus/usb/devices/*; do
         *-*) ;;
         *) continue ;;
     esac
+
+    # Devices claimed by the buffered HID mirror must stay on the Pi's usbhid
+    # so the mirror can read them.  Only honour the claim while the mirror
+    # service is actually running, so a dead daemon cannot leave a device
+    # unexported.
+    if [ -s "$MIRROR_CLAIM" ] && grep -qxF "$busid" "$MIRROR_CLAIM" \
+        && systemctl is-active --quiet usbpi-hid-mirror.service 2>/dev/null; then
+        continue
+    fi
+
     [ -r "$dev/idVendor" ] || continue
     vid="$(cat "$dev/idVendor" 2>/dev/null)"
     pid="$(cat "$dev/idProduct" 2>/dev/null)"

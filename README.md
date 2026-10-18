@@ -70,7 +70,8 @@ needed, and re-attaches whenever the Pi or a device comes back.
 flash.sh            build the image (if needed) + write it to a block device
 connect.sh          attach every device the Pi exports to this machine
 client/             attach/detach/sync scripts + a NixOS module
-server/             the configuration baked into the image
+server/             the configuration baked into the image, including
+                    usbpi-hid-mirror.c (the buffered-HID daemon)
 scripts/            low-level build + drive-inspection helpers
 shell.nix, flake.nix, usbip.nix   build environment / client tool
 ```
@@ -96,6 +97,10 @@ steady state
   usbipd                 listens on 0.0.0.0:3240
   usbip-autobind.timer   every 5s runs usbip-bind-all.sh, which exports every
                          local USB device not yet bound to usbip-host
+  usbpi-hid-mirror       keeps HID devices on the Pi's usbhid, buffers their
+                         reports and replays them into virtual HID gadgets
+  usbipd -e              device mode, listens on 0.0.0.0:3241 and exports the
+                         gadgets created by usbpi-hid-mirror
 ```
 
 `usbip-bind-all.sh` deliberately **excludes**:
@@ -104,9 +109,52 @@ steady state
   (`0424:9514`/`0424:9512`) — exporting them would kill the network;
 * USB hubs / root hubs — not exportable anyway;
 * any mass-storage interface (USB class 08) — this protects the USB flash
-  drive the Pi boots from.
+  drive the Pi boots from;
+* anything the buffered HID mirror has claimed — those devices are exported as
+  virtual HID gadgets instead (see below).
 
-Everything else (keyboards, mice, serial adapters, …) is exported.
+Everything else (serial adapters, …) is exported the plain way.
+
+---
+
+## Buffered HID devices (no dropped keys)
+
+Plain USB/IP only polls a device while the client has a transfer in flight, so
+a key press+release that happens during a network hiccup can vanish before the
+Pi ever sees it. Keyboards and mice are therefore handled differently:
+
+* they stay on the Pi's own `usbhid`, which polls them at their native rate no
+  matter what the network is doing;
+* `usbpi-hid-mirror` copies every report into a bounded queue (default 65536
+  reports per interface) and replays it into a virtual USB device built from
+  the device's own descriptors — same VID/PID, same report descriptor;
+* `usbipd -e` exports that virtual device on TCP 3241.
+
+The client sees an ordinary USB keyboard/mouse and `connect.sh` attaches it
+automatically. Interference, congestion or a stalled client can only *delay*
+reports, never drop them — and keys typed while the client is offline are
+delivered on reconnect. If the queue cap is hit, the oldest reports are dropped
+and a warning is logged (`journalctl -u usbpi-hid-mirror -f`).
+
+Configuration lives in `/etc/usbpi/hid-mirror.conf` on the Pi: `queue_limit`,
+`rescan_ms` and `exclude = vid:pid …` for devices that should stay on the old
+path (e.g. a headset whose audio interface you need on the client).
+`USBIP_GADGET=0 ./connect.sh` disables attaching buffered devices client-side.
+
+Limitations:
+
+* only HID devices (keyboards, mice, gamepads) get this treatment — that is
+  what the buffering is for; everything else stays on the plain USB/IP path;
+* the kernel allows 4 HID gadget interfaces in total, so at most about two
+  typical keyboards; further devices fall back to plain USB/IP;
+* on composite devices only the HID interfaces are exported — e.g. a headset's
+  audio interface would not appear on the client (use `exclude` if that
+  matters);
+* the queue lives in RAM: a Pi reboot or daemon restart loses whatever was
+  buffered at that moment (the daemon itself is restarted automatically);
+* errors on the physical USB link between device and Pi cannot be recovered by
+  any software — but the Pi now polls like a locally attached keyboard, which
+  is the best physically possible.
 
 ---
 
@@ -119,6 +167,10 @@ Everything else (keyboards, mice, serial adapters, …) is exported.
 ./connect.sh --once          # all devices, one pass
 USBIP_VIDPID=413c:2113 ./connect.sh   # only this vendor:product
 ```
+
+Buffered HID gadgets (the Pi's second daemon on port 3241) are attached
+automatically; `USBIP_GADGET=0` skips them, `USBIP_GADGET_PORT=…` changes the
+port.
 
 ### Manual
 
@@ -178,7 +230,8 @@ If you prefer nss-mdns so ordinary programs resolve `.local`, add
 
 * **`usbipd` has no authentication.** Debian builds it against `libwrap`, so
   `server/hosts.allow` limits connections to RFC1918 and link-local ranges;
-  everything else is denied by `server/hosts.deny`. If your LAN uses a
+  everything else is denied by `server/hosts.deny`. The device-mode daemon on
+  port 3241 is covered by the same rules. If your LAN uses a
   different range, edit `server/hosts.allow` and reflash. Rebuild with
   `USBIP_LOCKDOWN=0 ./flash.sh /dev/sdX` to export to the whole LAN with no
   restriction (not recommended).
@@ -197,6 +250,8 @@ If you prefer nss-mdns so ordinary programs resolve `.local`, add
 | `usbip ... -r <name>` fails "Unknown Op Common Status" | The name has an IPv6 (AAAA) record that plain `usbip` tries first. Use `./connect.sh` or the `client/` scripts (they resolve IPv4), or pass the IPv4 address. |
 | `usbip list -r` shows nothing | Provisioning may still be running. SSH in and run `journalctl -u usbip-provision -f` (needs internet on first boot). |
 | Device missing after replug | It is re-exported within 5 s. On the client, restart `usbip-attach` (module) or re-run the attach script. |
+| Keyboard/mouse missing on the client | Check the mirror: `systemctl status usbpi-hid-mirror`, `journalctl -u usbpi-hid-mirror -f`; gadgets are listed with `usbip --tcp-port 3241 list -r usbip-pi.local`. |
+| Device exported raw instead of buffered | It is excluded in `/etc/usbpi/hid-mirror.conf`, over the 4-interface gadget budget, or has a report >512 bytes — see the mirror logs. |
 | Did the Pi actually boot the drive? | `./scripts/check-drive.sh /dev/sdX` (read-only) reports whether `firstrun.sh` ran. |
 | Server logs | `journalctl -u usbipd -u usbip-autobind`; bind script log in `/var/log/usbip-provision.log`. |
 | Wrong LAN range for restrictions | edit `server/hosts.allow`, rebuild, reflash. |
@@ -210,6 +265,10 @@ If you prefer nss-mdns so ordinary programs resolve `.local`, add
   from the microSD card always works and is recommended.
 * Isochronous USB devices (webcams, USB audio) do not work well over USB/IP;
   interrupt/bulk devices (keyboards, mice, serial, storage) are fine.
+* Buffered HID devices are re-exported as virtual gadgets, so the client sees a
+  copy of the device rather than the device itself; the VID/PID and descriptors
+  match, but see [Buffered HID devices](#buffered-hid-devices-no-dropped-keys)
+  for the limitations.
 * Only one client can use an exported device at a time — a USB limitation.
 * The keyboard plugged into the Pi is **not** usable locally on the Pi (by
   design).
@@ -226,6 +285,11 @@ USBPI_IMAGE_URL=... ./scripts/build-image.sh   # override the base image
 ./scripts/check-drive.sh /dev/sdX          # read-only diagnosis of a flashed drive
 rm -rf build usbip-pi.img usbip-pi.img.sha256   # force a clean rebuild
 ```
+
+The image build cross-compiles `server/usbpi-hid-mirror.c` for armv7 with the
+toolchain from the nix shell. Override with `USBIP_ARM_CC` (and
+`USBIP_ARM_STATIC_LIB` for the static `libc.a` directory) if you supply your
+own compiler.
 
 ---
 

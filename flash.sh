@@ -84,6 +84,14 @@ have_build_tools() {
     for t in curl xz mtools sfdisk python3 openssl sha256sum; do
         command -v "$t" >/dev/null 2>&1 || return 1
     done
+    # cross compiler for the buffered HID mirror daemon
+    if [ -n "${USBPI_ARM_CC:-}" ]; then
+        [ -x "$USBPI_ARM_CC" ] || command -v "$USBPI_ARM_CC" >/dev/null 2>&1 || return 1
+    elif ! command -v armv7l-unknown-linux-gnueabihf-gcc >/dev/null 2>&1 \
+        && ! command -v arm-linux-gnueabihf-gcc >/dev/null 2>&1; then
+        return 1
+    fi
+    return 0
 }
 
 run_build() {

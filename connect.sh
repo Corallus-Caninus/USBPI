@@ -16,6 +16,8 @@
 #   USBIP_CANDIDATES  extra fallbacks to try    (default: usbip-pi.local)
 #   USBIP_INTERVAL    seconds between checks    (default: 5)
 #   USBIP_VIDPID      attach only this device, e.g. 13ba:0018 (default: all)
+#   USBIP_GADGET      0 disables attaching the Pi's buffered HID gadgets
+#   USBIP_GADGET_PORT device-mode usbipd port   (default: 3241)
 #
 # For boot-time persistence use the NixOS module (client/usbip-client.nix).
 set -u
@@ -51,6 +53,12 @@ envs=(
     "USBIP_CANDIDATES=$candidates"
     "USBIP_INTERVAL=$interval"
 )
+if [ -n "${USBIP_GADGET:-}" ]; then
+    envs+=("USBIP_GADGET=$USBIP_GADGET")
+fi
+if [ -n "${USBIP_GADGET_PORT:-}" ]; then
+    envs+=("USBIP_GADGET_PORT=$USBIP_GADGET_PORT")
+fi
 if [ -n "$vidpid" ]; then
     envs+=("USBIP_VIDPID=$vidpid")
 else
