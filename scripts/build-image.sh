@@ -31,18 +31,6 @@ for t in curl xz mtools sfdisk python3 openssl sha256sum; do
     command -v "$t" >/dev/null 2>&1 || die "missing tool '$t' - run via ./flash.sh (auto nix shell) or inside 'nix develop'"
 done
 
-# cross compiler for the armv7 (Raspberry Pi OS armhf) HID mirror daemon
-ARM_CC="${USBPI_ARM_CC:-}"
-if [ -z "$ARM_CC" ]; then
-    for c in armv7l-unknown-linux-gnueabihf-gcc arm-linux-gnueabihf-gcc; do
-        if command -v "$c" >/dev/null 2>&1; then
-            ARM_CC="$(command -v "$c")"
-            break
-        fi
-    done
-fi
-[ -n "$ARM_CC" ] || die "missing armv7 cross compiler (armv7l-unknown-linux-gnueabihf-gcc) - run via ./flash.sh (auto nix shell) or inside 'nix develop'"
-
 mkdir -p build
 
 # ---------------------------------------------------------------------------
@@ -83,17 +71,10 @@ if [ ! -f "$IMG" ] || [ "$src" -nt "$IMG" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 2b. cross-compile the buffered HID mirror daemon (armv7, static)
+# 2b. cross-compile the server programs (armv7, static)
 # ---------------------------------------------------------------------------
-ARM_STATIC_LIB="${USBPI_ARM_STATIC_LIB:-}"
-arm_ldflags=(-static)
-if [ -n "$ARM_STATIC_LIB" ]; then
-    arm_ldflags+=(-L "$ARM_STATIC_LIB")
-fi
-log "building usbpi-hid-mirror (armv7, static) with $ARM_CC"
-"$ARM_CC" -O2 -Wall -Wextra -Wno-format-truncation "${arm_ldflags[@]}" \
-    -o build/usbpi-hid-mirror "$SERVER_DIR/usbpi-hid-mirror.c" \
-    || die "cross-compiling usbpi-hid-mirror failed"
+log "building server binaries (armv7)"
+"$root/build.sh" server || die "cross-compiling the server failed"
 command -v file >/dev/null 2>&1 && file build/usbpi-hid-mirror || true
 
 # ---------------------------------------------------------------------------
@@ -138,12 +119,9 @@ mmd "${FAT[@]}" ::/usbpi 2>/dev/null || true
 for f in \
     firstrun.sh \
     usbip-provision.sh \
-    usbip-bind-all.sh \
     usbipd.service \
     usbipd-device.service \
     usbpi-hid-mirror.service \
-    usbip-autobind.service \
-    usbip-autobind.timer \
     usbip-provision.service \
     hid-mirror.conf \
     modprobe-usbpi.conf \

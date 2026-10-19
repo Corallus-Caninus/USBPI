@@ -46,12 +46,10 @@ systemctl daemon-reload
 # Start the buffered HID mirror first: it claims HID devices onto the Pi's own
 # usbhid before usbipd can export them, closing the window in which a client
 # could attach the raw device only to have the mirror take it over moments
-# later.  bind-all skips everything the mirror has claimed.
+# later.  The daemon itself exports everything the mirror has not claimed.
 systemctl enable --now usbpi-hid-mirror.service || true
 systemctl enable --now usbipd.service
-systemctl enable --now usbip-autobind.timer
 systemctl enable --now usbipd-device.service || true
-/usr/local/sbin/usbip-bind-all.sh || true
 
 # --- mark done --------------------------------------------------------------
 touch /var/lib/.usbip-provisioned

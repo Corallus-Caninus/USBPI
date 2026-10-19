@@ -1,8 +1,0 @@
-[Unit]
-Description=Export local USB devices over USB/IP
-After=usbipd.service
-Wants=usbipd.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/usbip-bind-all.sh

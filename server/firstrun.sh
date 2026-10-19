@@ -68,11 +68,8 @@ install -m 644 "$PAYLOAD/modules-load.conf"    /etc/modules-load.d/usbip.conf
 install -m 644 "$PAYLOAD/usbipd.service"       /etc/systemd/system/usbipd.service
 install -m 644 "$PAYLOAD/usbipd-device.service" /etc/systemd/system/usbipd-device.service
 install -m 644 "$PAYLOAD/usbpi-hid-mirror.service" /etc/systemd/system/usbpi-hid-mirror.service
-install -m 644 "$PAYLOAD/usbip-autobind.service" /etc/systemd/system/usbip-autobind.service
-install -m 644 "$PAYLOAD/usbip-autobind.timer" /etc/systemd/system/usbip-autobind.timer
 install -m 644 "$PAYLOAD/usbip-provision.service" /etc/systemd/system/usbip-provision.service
 install -m 755 "$PAYLOAD/usbip-provision.sh"   /usr/local/sbin/usbip-provision.sh
-install -m 755 "$PAYLOAD/usbip-bind-all.sh"    /usr/local/sbin/usbip-bind-all.sh
 install -m 755 "$PAYLOAD/usbpi-hid-mirror"     /usr/local/sbin/usbpi-hid-mirror
 install -d /etc/usbpi /etc/modprobe.d
 install -m 644 "$PAYLOAD/hid-mirror.conf"      /etc/usbpi/hid-mirror.conf
