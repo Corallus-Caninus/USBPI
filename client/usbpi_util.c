@@ -101,7 +101,7 @@ static int run_capture(char *const argv[], char *out, size_t outsz, int *status)
         used += (size_t)n;
     }
     if (used + 1 >= outsz) {
-        char tmp[512];
+        char tmp[TMP_BUF];
 
         while (read(pfd[0], tmp, sizeof(tmp)) > 0)
             ;
@@ -288,7 +288,7 @@ static void remember_ip(const char *ip)
 static bool read_last_ip(char *out, size_t outsz)
 {
     FILE *f = fopen(LAST_IP_FILE, "r");
-    char line[64];
+    char line[IP_STR];
 
     if (!f)
         return false;
@@ -306,7 +306,7 @@ static bool read_last_ip(char *out, size_t outsz)
 
 struct remote_dev {
     char busid[NAME_MAX_LEN];
-    char vidpid[16];
+    char vidpid[VIDPID_LEN];
 };
 
 static bool valid_busid(const char *s, size_t len)
@@ -373,7 +373,7 @@ static int parse_remote_listing(const char *listing, struct remote_dev *out,
 struct attached_dev {
     int port;
     char busid[NAME_MAX_LEN];
-    char vidpid[16];
+    char vidpid[VIDPID_LEN];
 };
 
 static int parse_ports(const char *text, struct attached_dev *out, int max)
@@ -429,7 +429,7 @@ static int parse_ports(const char *text, struct attached_dev *out, int max)
 
 static void attached_vidpid_string(const char *text, char *out, size_t outsz)
 {
-    struct attached_dev devs[32];
+    struct attached_dev devs[DEVS_MAX];
     int n = parse_ports(text, devs, 32);
     int i;
     size_t used = 0;
@@ -453,7 +453,7 @@ static void attached_vidpid_string(const char *text, char *out, size_t outsz)
 
 static bool vidpid_in_list(const char *list, const char *vidpid)
 {
-    char needle[32];
+    char needle[NEEDLE_STR];
 
     if (!vidpid[0] || !list[0])
         return false;
@@ -479,7 +479,7 @@ static int usbip_port_cmd(const char *usbip, char *out, size_t outsz,
 static int usbip_list_cmd(const char *usbip, const char *ip, int port,
                           char *out, size_t outsz, int *status)
 {
-    char portbuf[16];
+    char portbuf[PORT_STR];
     char *argv[8];
     int i = 0;
 
@@ -499,7 +499,7 @@ static int usbip_list_cmd(const char *usbip, const char *ip, int port,
 static int usbip_attach_cmd(const char *usbip, const char *ip, int port,
                             const char *busid)
 {
-    char portbuf[16];
+    char portbuf[PORT_STR];
     char *argv[9];
     int i = 0;
 
@@ -520,7 +520,7 @@ static int usbip_attach_cmd(const char *usbip, const char *ip, int port,
 
 static int usbip_detach_cmd(const char *usbip, int port)
 {
-    char portbuf[16];
+    char portbuf[PORT_STR];
     char *argv[5];
 
     snprintf(portbuf, sizeof(portbuf), "%d", port);

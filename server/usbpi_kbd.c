@@ -21,6 +21,7 @@ static struct kbd_ringev kbd_ring[KBD_RING_EVENTS];
 static unsigned kbd_ring_head;
 static unsigned kbd_ring_count;
 static uint32_t kbd_last_ack;
+static bool kbd_hello_seen;
 static int64_t kbd_last_send_ms;
 static bool kbd_dirty;
 static uint8_t kbd_led;
@@ -406,14 +407,19 @@ static int kbd_find_evdev(const char *vid_s, const char *pid_s,
     return found;
 }
 
+/* Only treat a device as a keyboard when its primary (lowest-numbered) HID
+ * interface is the keyboard.  Mice with an auxiliary macro-keyboard
+ * interface and keyboard+touchpad combos then stay on plain USB/IP instead
+ * of losing their non-keyboard interfaces. */
 static bool device_has_keyboard(const struct device *d)
 {
-    int i;
+    int i, first = -1;
 
-    for (i = 0; i < d->nifaces; i++)
-        if (d->ifaces[i].is_keyboard)
-            return true;
-    return false;
+    for (i = 0; i < d->nifaces; i++) {
+        if (first < 0 || d->ifaces[i].ifnum < d->ifaces[first].ifnum)
+            first = i;
+    }
+    return first >= 0 && d->ifaces[first].is_keyboard;
 }
 
 static int kbd_open_device(struct device *d)
@@ -518,6 +524,8 @@ static void kbd_parse_in(void)
         }
         if (h.type == KBD_PKT_HELLO) {
             kbd_led = led;
+            kbd_hello_seen = true;
+            kbd_dirty = false;
             if (h.session != kbd_session) {
                 kbd_last_ack = 0;
                 kbd_send_snapshot(KBD_FLAG_GAP);
@@ -613,10 +621,9 @@ static void kbd_accept(void)
         kbd_out_len = 0;
         kbd_in_len = 0;
         kbd_last_ack = 0;
+        kbd_hello_seen = false;
         kbd_last_send_ms = now_ms();
-        log_info("keyboard client connected");
-        kbd_send_snapshot(0);
-        kbd_out_flush();
+        log_info("keyboard client connected; waiting for HELLO");
     }
 }
 
@@ -657,7 +664,7 @@ static void kbd_service(void)
 {
     int64_t now;
 
-    if (kbd_client_fd < 0)
+    if (kbd_client_fd < 0 || !kbd_hello_seen)
         return;
     now = now_ms();
     if (kbd_dirty) {

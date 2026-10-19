@@ -7,7 +7,7 @@ struct config {
     bool keyboard;
     unsigned queue_limit;
     int rescan_ms;
-    char exclude[MAX_EXCLUDE][16];   /* "vvvv:pppp", lower case */
+    char exclude[MAX_EXCLUDE][VIDPID_LEN];   /* "vvvv:pppp", lower case */
     int nexc;
 };
 
@@ -20,7 +20,7 @@ static void parse_exclude(struct config *cfg, char *val)
 
     for (tok = strtok_r(val, " ,\t\r\n", &save); tok;
          tok = strtok_r(NULL, " ,\t\r\n", &save)) {
-        char entry[16];
+        char entry[VIDPID_LEN];
         size_t i, len = strlen(tok);
 
         if (cfg->nexc >= MAX_EXCLUDE) {
@@ -108,7 +108,7 @@ static void load_config(const char *path, struct config *cfg)
 static bool is_excluded(const struct config *cfg, const char *vid,
                         const char *pid)
 {
-    char vidpid[16];
+    char vidpid[VIDPID_LEN];
     int i;
 
     snprintf(vidpid, sizeof(vidpid), "%.4s:%.4s", vid, pid);

@@ -45,7 +45,14 @@ if [ ! -x "$root/build/usbpi" ] \
 fi
 
 if [ "$(id -u)" != 0 ]; then
-    exec sudo -E "$0" "$@"
+    envs=()
+    for v in USBIP_SERVER USBIP_CANDIDATES USBIP_INTERVAL USBIP_VIDPID \
+             USBIP_GADGET USBIP_GADGET_PORT USBIP_KEYBOARD USBIP_ONCE; do
+        if [ -n "${!v:-}" ]; then
+            envs+=("$v=${!v}")
+        fi
+    done
+    exec sudo -E env "${envs[@]}" "$0" "$@"
 fi
 
 kpid=""

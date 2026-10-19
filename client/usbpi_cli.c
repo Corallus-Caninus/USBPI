@@ -52,8 +52,8 @@ static void collect_attached_vidpids(const char *usbip, char *out, size_t outsz)
 static bool attach_all_from(const char *usbip, const char *ip, int port,
                             const char *filter, const char *skip)
 {
-    struct remote_dev rem[32];
-    struct attached_dev cur[32];
+    struct remote_dev rem[DEVS_MAX];
+    struct attached_dev cur[DEVS_MAX];
     char seen[CLIENT_CMD_MAX] = "";
     int nr, nc, i;
     bool exported = false;
@@ -91,7 +91,7 @@ static bool attach_all_from(const char *usbip, const char *ip, int port,
 
 static void detach_matching(const char *usbip, const char *filter)
 {
-    struct attached_dev cur[32];
+    struct attached_dev cur[DEVS_MAX];
     int n = refresh_ports(usbip, cur, 32);
     int i;
 
@@ -114,9 +114,9 @@ static int cmd_attach(int argc, char **argv)
     bool gadget = !gadget_s || strcmp(gadget_s, "0");
     int gport = getenv("USBIP_GADGET_PORT") ? atoi(getenv("USBIP_GADGET_PORT"))
                                             : GADGET_PORT;
-    char ip[64], usbip[PATH_MAX];
-    struct remote_dev rem[32];
-    struct attached_dev cur[32];
+    char ip[IP_STR], usbip[PATH_MAX];
+    struct remote_dev rem[DEVS_MAX];
+    struct attached_dev cur[DEVS_MAX];
     int n, i, chosen_port = USBIP_PORT;
     const char *chosen = NULL;
 
@@ -153,6 +153,11 @@ static int cmd_attach(int argc, char **argv)
     if (!chosen) {
         usbpi_log("%s exports no matching device", server);
         return 1;
+    }
+    n = refresh_ports(usbip, cur, 32);
+    if (port_list_has(cur, n, chosen, filter[0] ? filter : NULL)) {
+        usbpi_log("already attached");
+        return 0;
     }
     usbpi_log("attaching %s from %s:%d", chosen, ip, chosen_port);
     if (usbip_attach_cmd(usbip, ip, chosen_port, chosen) != 0) {
@@ -193,7 +198,7 @@ static int cmd_watch(int argc, char **argv)
     const char *all_env = getenv("USBIP_ALL");
     bool all;
     int down = 0;
-    char last_state[32] = "";
+    char last_state[STATE_STR] = "";
     char usbip[PATH_MAX];
     int i;
 
@@ -222,7 +227,7 @@ static int cmd_watch(int argc, char **argv)
     signal(SIGTERM, cli_signal);
 
     while (!cli_stop) {
-        char ip[64];
+        char ip[IP_STR];
         bool ok;
 
         ok = resolve_server(server, ip, sizeof(ip)) == 0 &&
@@ -265,49 +270,47 @@ static int cmd_watch(int argc, char **argv)
                     snprintf(last_state, sizeof(last_state), "attached");
                 }
             } else {
-                struct attached_dev cur[32];
-                int n = refresh_ports(usbip, cur, 32);
+                struct attached_dev cur[DEVS_MAX];
+                struct remote_dev rem[DEVS_MAX];
+                const char *chosen = NULL;
+                int ncur = refresh_ports(usbip, cur, 32);
+                int port = USBIP_PORT;
+                int nr;
 
-                if (filter_env && filter_env[0]
-                        ? port_list_has(cur, n, NULL, filter_env)
-                        : n > 0) {
-                    if (strcmp(last_state, "attached"))
-                        usbpi_log("attached via %s", ip);
-                    snprintf(last_state, sizeof(last_state), "attached");
-                } else {
-                    struct remote_dev rem[32];
-                    const char *chosen = NULL;
-                    int port = USBIP_PORT;
-
-                    n = list_remote(usbip, ip, USBIP_PORT, rem, 32);
-                    for (i = 0; i < n; i++) {
+                nr = list_remote(usbip, ip, USBIP_PORT, rem, 32);
+                for (i = 0; i < nr; i++) {
+                    if (!filter_env[0] ||
+                        !strcmp(filter_env, rem[i].vidpid)) {
+                        chosen = rem[i].busid;
+                        break;
+                    }
+                }
+                if (!chosen && gadget) {
+                    nr = list_remote(usbip, ip, gport, rem, 32);
+                    for (i = 0; i < nr; i++) {
                         if (!filter_env[0] ||
                             !strcmp(filter_env, rem[i].vidpid)) {
                             chosen = rem[i].busid;
+                            port = gport;
                             break;
                         }
                     }
-                    if (!chosen && gadget) {
-                        n = list_remote(usbip, ip, gport, rem, 32);
-                        for (i = 0; i < n; i++) {
-                            if (!filter_env[0] ||
-                                !strcmp(filter_env, rem[i].vidpid)) {
-                                chosen = rem[i].busid;
-                                port = gport;
-                                break;
-                            }
-                        }
-                    }
-                    if (chosen) {
-                        usbpi_log("attaching %s from %s:%d", chosen, ip, port);
-                        if (usbip_attach_cmd(usbip, ip, port, chosen) == 0)
-                            snprintf(last_state, sizeof(last_state), "attached");
-                    } else {
-                        if (strcmp(last_state, "no-device"))
-                            usbpi_log("%s reachable, requested device not exported",
-                                 ip);
-                        snprintf(last_state, sizeof(last_state), "no-device");
-                    }
+                }
+                if (chosen &&
+                    port_list_has(cur, ncur, chosen,
+                                  filter_env[0] ? filter_env : NULL)) {
+                    if (strcmp(last_state, "attached"))
+                        usbpi_log("attached via %s", ip);
+                    snprintf(last_state, sizeof(last_state), "attached");
+                } else if (chosen) {
+                    usbpi_log("attaching %s from %s:%d", chosen, ip, port);
+                    if (usbip_attach_cmd(usbip, ip, port, chosen) == 0)
+                        snprintf(last_state, sizeof(last_state), "attached");
+                } else {
+                    if (strcmp(last_state, "no-device"))
+                        usbpi_log("%s reachable, requested device not exported",
+                                  ip);
+                    snprintf(last_state, sizeof(last_state), "no-device");
                 }
             }
         }

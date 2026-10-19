@@ -56,8 +56,11 @@ No keyboard, monitor or login is ever required for normal operation.
 
 ```sh
 ./connect.sh             # keep everything attached (Ctrl-C to stop)
-./connect.sh --once      # attach everything once, then exit
+./connect.sh --once      # attach non-keyboard devices once, then exit
 ```
+
+`--once` does not start the keyboard daemon (keyboards need the long-running
+`keyd` process); use the normal mode if you need the keyboard.
 
 It builds the C client if needed, self-elevates with sudo, finds the Pi by
 `usbip-pi.lan` (DNS), `usbip-pi.local` (mDNS via avahi) or an IP, and keeps
@@ -149,10 +152,12 @@ degrades to a lowercase `a`. This deliberately favours "never spam repeats"
 over "keep holding through interference": a bad stall may release and re-press
 a held key once.
 
-Non-keyboard HID (mice, gamepads, tablets) stays on plain USB/IP. Composite
-devices (keyboard plus something else) keep the whole device on `usbhid`; only
-the keyboard interface is forwarded, so the other interfaces of that device do
-not appear on the client.
+Non-keyboard HID (mice, gamepads, tablets) stays on plain USB/IP. A composite
+device uses the fast path only when its primary (lowest-numbered) HID
+interface is a keyboard; then the whole device stays on `usbhid` and only the
+keyboard is forwarded. A mouse with an auxiliary macro-keyboard interface is
+therefore left on plain USB/IP, and keyboard+touchpad combos can be forced
+either way with `exclude =` on the Pi.
 
 Configuration lives in `/etc/usbpi/hid-mirror.conf` on the Pi:
 
@@ -291,8 +296,9 @@ If you prefer nss-mdns so ordinary programs resolve `.local`, add
   interrupt/bulk devices (mice, serial, storage) are fine.
 * Keyboards are re-created as `uinput` devices, so the client sees a synthetic
   keyboard with the USBPI vendor/product rather than the physical device.
-* Composite devices with a keyboard keep the whole device on the Pi's `usbhid`;
-  only the keyboard interfaces are forwarded.
+* Composite devices whose primary HID interface is a keyboard keep the whole
+  device on the Pi's `usbhid`; only the keyboard is forwarded. Other composite
+  devices (and anything in `exclude`) use plain USB/IP.
 * Only one client can use an exported USB device at a time — a USB limitation.
   The keyboard fast path supports one client as well.
 * The keyboard plugged into the Pi is **not** usable locally on the Pi (by

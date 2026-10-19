@@ -5,7 +5,7 @@
 static bool onboard_vidpid(const char *vid, const char *pid)
 {
     static const char *skip[] = { "0424:ec00", "0424:9514", "0424:9512" };
-    char vidpid[16];
+    char vidpid[VIDPID_LEN];
     size_t i;
 
     snprintf(vidpid, sizeof(vidpid), "%.4s:%.4s", vid, pid);
@@ -92,7 +92,7 @@ static int fill_iface(struct iface *f, const char *ifname)
 }
 
 struct scan_dev {
-    char vid[8], pid[8], bcd[16];
+    char vid[VID_STR], pid[PID_STR], bcd[BCD_LEN];
     char manufacturer[MAX_STRING + 1];
     char product[MAX_STRING + 1];
     char serial[MAX_STRING + 1];

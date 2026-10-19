@@ -11,7 +11,7 @@ static uint8_t keyd_led;
 static bool keyd_released;
 static unsigned char keyd_held[KBD_KEY_BYTES];
 static int64_t keyd_last_pkt_ms;
-static int64_t keyd_gaps[32];
+static int64_t keyd_gaps[DEADMAN_GAPS];
 static unsigned keyd_ngaps;
 static unsigned keyd_gidx;
 static int64_t keyd_last_ack_ms;
@@ -104,6 +104,7 @@ static void keyd_release_all(void)
  * press held keys with modifiers first (so Shift+A is never sent as 'a'). */
 static void keyd_reconcile(const unsigned char *snap)
 {
+    bool was_held = keyd_any_held();
     uint16_t code;
     int pass;
 
@@ -128,6 +129,12 @@ static void keyd_reconcile(const unsigned char *snap)
         }
     }
     memcpy(keyd_held, snap, sizeof(keyd_held));
+    if (!was_held && keyd_any_held()) {
+        /* Start the dead-man from the active interval as soon as a key goes
+         * down; idle snapshots must not inflate the timeout. */
+        keyd_ngaps = 0;
+        keyd_gidx = 0;
+    }
     keyd_released = false;
 }
 
@@ -139,8 +146,8 @@ static void keyd_note_gap(int64_t now)
         if (gap < 0)
             gap = 0;
         keyd_gaps[keyd_gidx] = gap;
-        keyd_gidx = (keyd_gidx + 1) % 32;
-        if (keyd_ngaps < 32)
+        keyd_gidx = (keyd_gidx + 1) % DEADMAN_GAPS;
+        if (keyd_ngaps < DEADMAN_GAPS)
             keyd_ngaps++;
     }
     keyd_last_pkt_ms = now;
@@ -327,7 +334,8 @@ static void keyd_parse(unsigned char *in, size_t *inlen)
         for (i = 0; i < count; i++) {
             if (evs[i].seq <= keyd_last_applied)
                 continue;
-            if (evs[i].code <= KEY_MAX) {
+            if (evs[i].code <= KEY_MAX &&
+                bits_get(keyd_held, evs[i].code) != (evs[i].value != 0)) {
                 bits_set(keyd_held, evs[i].code, evs[i].value != 0);
                 keyd_emit(evs[i].code, evs[i].value ? 1 : 0);
             }
@@ -374,7 +382,7 @@ static int keyd_run(const char *server)
     signal(SIGTERM, cli_signal);
 
     while (!cli_stop) {
-        char ip[64];
+        char ip[IP_STR];
         struct pollfd pfd[2];
         int nfds;
 

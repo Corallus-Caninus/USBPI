@@ -19,8 +19,8 @@ static void tune_governor(void)
 static void tune_irq_affinity(void)
 {
     FILE *f = fopen("/proc/interrupts", "r");
-    char line[512];
-    char mask[32];
+    char line[TUNE_LINE_MAX];
+    char mask[CPU_MASK_STR];
     unsigned long irq;
     char *end;
 

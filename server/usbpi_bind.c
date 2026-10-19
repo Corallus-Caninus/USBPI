@@ -43,7 +43,7 @@ static bool tcp_port_established(unsigned port)
     if (!f)
         return false;
     while (fgets(line, sizeof(line), f)) {
-        char local[64], rem[64], st[8];
+        char local[NET_ADDR_STR], rem[NET_ADDR_STR], st[TCP_STATE_STR];
         char *colon;
         unsigned p;
 
@@ -91,7 +91,7 @@ static void bind_pass(void)
         return;
 
     while ((e = readdir(dir))) {
-        char devdir[PBUF], path[PBUF], vid[8], pid[8], st[16];
+        char devdir[PBUF], path[PBUF], vid[VID_STR], pid[PID_STR], st[TCP_STATE_STR];
         unsigned long cls;
         struct device *d;
 
@@ -146,7 +146,8 @@ static void bind_pass(void)
             log_warn("%s: resetting stuck usbip-host export (status=%s)",
                      e->d_name, st);
             usbip_unbind(e->d_name);
-            usleep(1000 * 1000);
+            /* Do not block the event loop: the next pass rebinds it. */
+            continue;
         }
 
         if (usbip_bind(e->d_name) == 0)

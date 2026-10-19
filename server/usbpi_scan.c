@@ -126,7 +126,7 @@ static void probe_interfaces(struct device *d)
 
 static void handle_device(struct device *d)
 {
-    char path[PBUF], st[16];
+    char path[PBUF], st[TCP_STATE_STR];
     bool bound, in_use = false;
     int vc;
 
@@ -138,7 +138,7 @@ static void handle_device(struct device *d)
     /* With the keyboard fast path enabled, only keyboards are claimed here.
      * Mice, gamepads and other HID devices stay on usbip-host and are
      * exported raw by bind_pass(). */
-    if (g_cfg.keyboard && !device_has_keyboard(d))
+    if (g_cfg.keyboard && (!device_has_keyboard(d) || d->kbd_no))
         return;
 
     snprintf(path, sizeof(path), USBIP_HOST "/%s", d->busid);

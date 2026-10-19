@@ -175,6 +175,13 @@ int main(int argc, char **argv)
         if (!opt_dry_run && next_bind < next_scan &&
             (int)(next_bind - loop_now) < timeout)
             timeout = (int)(next_bind - loop_now);
+        if (kbd_client_fd >= 0) {
+            int kbd_wait = kbd_any_held() ? KBD_SNAPSHOT_MS
+                                          : KBD_IDLE_SNAPSHOT_MS;
+
+            if (kbd_wait < timeout)
+                timeout = kbd_wait;
+        }
         if (timeout < 0)
             timeout = 0;
 

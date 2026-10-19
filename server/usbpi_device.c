@@ -49,9 +49,9 @@ struct device {
     time_t wait_since;           /* when we started waiting for hidraw */
     char busid[NAME_MAX_LEN];
     char dir[PATH_MAX];
-    char vid[8];
-    char pid[8];
-    char bcd[16];
+    char vid[VID_STR];
+    char pid[PID_STR];
+    char bcd[BCD_LEN];
     char manufacturer[MAX_STRING + 1];
     char product[MAX_STRING + 1];
     char serial[MAX_STRING + 1];
