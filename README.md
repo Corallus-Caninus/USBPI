@@ -144,13 +144,19 @@ Keyboards are not forwarded as USB devices. Instead:
   away longer than the ring, the server sends the current state with a `GAP`
   marker and the middle is lost by design.
 
-Held keys are protected by a dead-man watchdog: if three snapshot intervals
-(default 150 ms, auto-raised from measured jitter and capped at 500 ms) pass
-without a packet, the client releases everything. A key that is still held is
-re-pressed from the next snapshot, with modifiers first so `Shift+A` never
-degrades to a lowercase `a`. This deliberately favours "never spam repeats"
-over "keep holding through interference": a bad stall may release and re-press
-a held key once.
+Held keys are protected by a dead-man watchdog tied to the kernel's keyboard
+autorepeat delay. The client reads the `uinput` keyboard's repeat delay (and
+raises only that virtual device to at least 250 ms if the system value is
+shorter), then releases after three missed snapshots (150 ms) — always before
+the first autorepeat could fire. A key that is still held is re-pressed from
+the next snapshot, with modifiers first so `Shift+A` never degrades to a
+lowercase `a`. On a noisy link you will see held keys release and re-press, but
+the OS never starts repeating a key whose heartbeat was missed.
+
+A key-up lost on the *physical* USB link between keyboard and Pi cannot be
+detected by this (or any network-side) watchdog: the Pi never learned the key
+was released and keeps reporting it held. That is the physical-link limitation
+below.
 
 Non-keyboard HID (mice, gamepads, tablets) stays on plain USB/IP. A composite
 device uses the fast path only when its primary (lowest-numbered) HID

@@ -11,10 +11,9 @@ static uint8_t keyd_led;
 static bool keyd_released;
 static unsigned char keyd_held[KBD_KEY_BYTES];
 static int64_t keyd_last_pkt_ms;
-static int64_t keyd_gaps[DEADMAN_GAPS];
-static unsigned keyd_ngaps;
-static unsigned keyd_gidx;
 static int64_t keyd_last_ack_ms;
+static int64_t keyd_deadman_value_ms = KBD_DEADMAN_MIN_MS;
+static unsigned int keyd_repeat_delay_ms = KBD_REPEAT_DELAY_MS;
 
 static bool keyd_is_modifier(uint16_t code)
 {
@@ -104,7 +103,6 @@ static void keyd_release_all(void)
  * press held keys with modifiers first (so Shift+A is never sent as 'a'). */
 static void keyd_reconcile(const unsigned char *snap)
 {
-    bool was_held = keyd_any_held();
     uint16_t code;
     int pass;
 
@@ -129,45 +127,106 @@ static void keyd_reconcile(const unsigned char *snap)
         }
     }
     memcpy(keyd_held, snap, sizeof(keyd_held));
-    if (!was_held && keyd_any_held()) {
-        /* Start the dead-man from the active interval as soon as a key goes
-         * down; idle snapshots must not inflate the timeout. */
-        keyd_ngaps = 0;
-        keyd_gidx = 0;
-    }
     keyd_released = false;
-}
-
-static void keyd_note_gap(int64_t now)
-{
-    if (keyd_last_pkt_ms) {
-        int64_t gap = now - keyd_last_pkt_ms;
-
-        if (gap < 0)
-            gap = 0;
-        keyd_gaps[keyd_gidx] = gap;
-        keyd_gidx = (keyd_gidx + 1) % DEADMAN_GAPS;
-        if (keyd_ngaps < DEADMAN_GAPS)
-            keyd_ngaps++;
-    }
-    keyd_last_pkt_ms = now;
 }
 
 static int64_t keyd_deadman_ms(void)
 {
-    int64_t maxgap = 0;
-    int64_t t;
-    unsigned i;
+    return keyd_deadman_value_ms;
+}
 
-    for (i = 0; i < keyd_ngaps; i++)
-        if (keyd_gaps[i] > maxgap)
-            maxgap = keyd_gaps[i];
-    t = maxgap * 2 + KBD_DEADMAN_MARGIN_MS;
-    if (t < KBD_DEADMAN_MIN_MS)
-        t = KBD_DEADMAN_MIN_MS;
-    if (t > KBD_DEADMAN_MAX_MS)
-        t = KBD_DEADMAN_MAX_MS;
-    return t;
+/* Locate the evdev node the kernel created for our uinput keyboard. */
+static int keyd_find_own_event(char *out, size_t outsz)
+{
+    glob_t g;
+    int found = -1;
+    size_t i;
+
+    if (glob("/dev/input/event*", 0, NULL, &g) != 0)
+        return -1;
+    for (i = 0; i < g.gl_pathc; i++) {
+        char name[UINPUT_MAX_NAME_SIZE];
+        struct input_id id;
+        int fd = open(g.gl_pathv[i], O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+
+        if (fd < 0)
+            continue;
+        memset(name, 0, sizeof(name));
+        memset(&id, 0, sizeof(id));
+        if (ioctl(fd, EVIOCGNAME(sizeof(name) - 1), name) >= 0 &&
+            ioctl(fd, EVIOCGID, &id) >= 0 &&
+            !strcmp(name, UINPUT_NAME) &&
+            id.vendor == UINPUT_VENDOR && id.product == UINPUT_PRODUCT) {
+            snprintf(out, outsz, "%s", g.gl_pathv[i]);
+            found = 0;
+            close(fd);
+            break;
+        }
+        close(fd);
+    }
+    globfree(&g);
+    return found;
+}
+
+/* The dead-man must fire before the kernel emits its first autorepeat.  Read
+ * the virtual keyboard's repeat delay; if it is shorter than a sane minimum,
+ * raise only this device's delay.  The dead-man is then the shorter of three
+ * missed snapshots and the repeat delay minus a safety margin. */
+static void keyd_configure_repeat(void)
+{
+    char path[PATH_MAX];
+    unsigned int rep[2] = { KBD_REPEAT_DELAY_MS, KBD_REPEAT_PERIOD_MS };
+    int tries, fd;
+    int wait_loops = KBD_EVENT_WAIT_MS / 10;
+
+    for (tries = 0; tries < wait_loops; tries++) {
+        if (keyd_find_own_event(path, sizeof(path)) == 0)
+            break;
+        usleep(10 * 1000);
+    }
+    if (tries == wait_loops) {
+        usbpi_log("uinput event node not found, assuming %d ms repeat delay",
+                  KBD_REPEAT_DELAY_MS);
+    } else {
+        fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+        if (fd >= 0) {
+            unsigned int cur[2] = { 0, 0 };
+
+            if (ioctl(fd, EVIOCGREP, cur) == 0 && cur[0] > 0) {
+                if (cur[0] >= KBD_REPEAT_DELAY_MS) {
+                    rep[0] = cur[0];
+                    if (cur[1] > 0)
+                        rep[1] = cur[1];
+                } else if (ioctl(fd, EVIOCSREP, rep) < 0) {
+                    /* Could not raise it: respect the shorter actual delay so
+                     * the dead-man still fires before autorepeat. */
+                    usbpi_log("cannot raise repeat delay: %s",
+                              strerror(errno));
+                    rep[0] = cur[0];
+                    if (cur[1] > 0)
+                        rep[1] = cur[1];
+                }
+            } else if (ioctl(fd, EVIOCSREP, rep) < 0) {
+                usbpi_log("cannot set repeat delay: %s", strerror(errno));
+            }
+            close(fd);
+        }
+    }
+
+    keyd_repeat_delay_ms = rep[0];
+    {
+        int64_t base = (int64_t)KBD_SNAPSHOT_MS * KBD_DEADMAN_MISSES;
+        int64_t bound = (int64_t)keyd_repeat_delay_ms -
+                        KBD_DEADMAN_MARGIN_MS;
+
+        if (bound < KBD_DEADMAN_MIN_MS)
+            bound = (int64_t)keyd_repeat_delay_ms / 2;
+        if (bound < 20)
+            bound = 20;
+        keyd_deadman_value_ms = base < bound ? base : bound;
+    }
+    usbpi_log("keyboard repeat delay %u ms, dead-man %lld ms",
+              keyd_repeat_delay_ms, (long long)keyd_deadman_value_ms);
 }
 
 static void keyd_send_pkt(uint8_t type, uint32_t flags)
@@ -345,7 +404,7 @@ static void keyd_parse(unsigned char *in, size_t *inlen)
         if (h.type == KBD_PKT_SNAPSHOT && h.seq > keyd_last_applied)
             keyd_last_applied = h.seq;
         now = cli_now_ms();
-        keyd_note_gap(now);
+        keyd_last_pkt_ms = now;
         keyd_send_pkt(KBD_PKT_ACK, 0);
         keyd_last_ack_ms = now;
         off += total;
@@ -377,6 +436,7 @@ static int keyd_run(const char *server)
     keyd_ufd = keyd_uinput_open();
     if (keyd_ufd < 0)
         return 1;
+    keyd_configure_repeat();
 
     signal(SIGINT, cli_signal);
     signal(SIGTERM, cli_signal);
@@ -408,7 +468,16 @@ static int keyd_run(const char *server)
         keyd_send_pkt(KBD_PKT_HELLO, keyd_released ? KBD_FLAG_RELEASED : 0);
 
         while (!cli_stop && keyd_fd >= 0) {
-            int64_t now;
+            int64_t now = cli_now_ms();
+            int timeout = KBD_SNAPSHOT_MS;
+
+            if (keyd_any_held() && keyd_last_pkt_ms) {
+                int64_t remain = keyd_deadman_ms() -
+                                 (now - keyd_last_pkt_ms);
+
+                if (remain < timeout)
+                    timeout = remain > 0 ? (int)remain : 0;
+            }
 
             pfd[0].fd = keyd_fd;
             pfd[0].events = POLLIN;
@@ -420,7 +489,7 @@ static int keyd_run(const char *server)
                 pfd[1].revents = 0;
                 nfds = 2;
             }
-            if (poll(pfd, (nfds_t)nfds, KBD_SNAPSHOT_MS) < 0) {
+            if (poll(pfd, (nfds_t)nfds, timeout) < 0) {
                 if (errno == EINTR)
                     continue;
                 usbpi_log("keyboard poll: %s", strerror(errno));
@@ -463,7 +532,7 @@ static int keyd_run(const char *server)
 
             now = cli_now_ms();
             if (keyd_any_held() && keyd_last_pkt_ms &&
-                now - keyd_last_pkt_ms > keyd_deadman_ms()) {
+                now - keyd_last_pkt_ms >= keyd_deadman_ms()) {
                 usbpi_log("keyboard heartbeat missed, releasing held keys");
                 keyd_release_all();
             }

@@ -62,7 +62,6 @@
 #define TUNE_LINE_MAX           512
 #define CPU_MASK_STR            32
 #define DEVS_MAX                32
-#define DEADMAN_GAPS            32
 #define STATE_STR               32
 #define TMP_BUF                 512
 #define SYSFS_SMALL_BUF         64
@@ -123,10 +122,16 @@
 #define KBD_SNAPSHOT_MS         50
 #define KBD_IDLE_SNAPSHOT_MS    200
 #define KBD_ACTIVE_MS           500
+/* Release a held key before the kernel's autorepeat can fire.  The client
+ * reads the uinput keyboard's repeat delay and raises it to at least
+ * KBD_REPEAT_DELAY_MS, then uses three missed snapshots or the repeat delay
+ * minus a safety margin, whichever is shorter. */
 #define KBD_DEADMAN_MISSES      3
-#define KBD_DEADMAN_MIN_MS      150
-#define KBD_DEADMAN_MAX_MS      500
-#define KBD_DEADMAN_MARGIN_MS   20
+#define KBD_DEADMAN_MIN_MS      50
+#define KBD_DEADMAN_MARGIN_MS   100
+#define KBD_REPEAT_DELAY_MS     250
+#define KBD_REPEAT_PERIOD_MS    33
+#define KBD_EVENT_WAIT_MS       500
 #define KBD_RECONNECT_MIN_MS    100
 #define KBD_RECONNECT_MAX_MS    2000
 #define KBD_ACK_MS              50
