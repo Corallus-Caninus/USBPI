@@ -1,5 +1,5 @@
 [Unit]
-Description=USBPI buffered HID mirror (configfs HID gadgets over usbip-vudc)
+Description=USBPI appliance daemon (USB export, keyboard fast path, HID mirror)
 Documentation=https://github.com/Corallus-Caninus/USBPI
 ConditionPathExists=/usr/sbin/usbip
 ConditionPathExists=/usr/local/sbin/usbpi-hid-mirror
@@ -12,6 +12,12 @@ ExecStartPre=/bin/sh -c 'mountpoint -q /sys/kernel/config || mount -t configfs n
 ExecStart=/usr/local/sbin/usbpi-hid-mirror -c /etc/usbpi/hid-mirror.conf
 Restart=always
 RestartSec=2
+Nice=-10
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=50
+IOSchedulingClass=realtime
+LimitRTPRIO=99
+LimitMEMLOCK=infinity
 
 [Install]
 WantedBy=multi-user.target

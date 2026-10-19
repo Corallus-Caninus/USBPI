@@ -10,4 +10,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
-        run: shellcheck -x flash.sh connect.sh client/*.sh server/*.sh scripts/*.sh
+        run: shellcheck -x build.sh flash.sh connect.sh server/*.sh scripts/*.sh

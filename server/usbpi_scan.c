@@ -2,6 +2,10 @@
 /* discovery pass                                                      */
 /* ------------------------------------------------------------------ */
 
+static bool device_has_keyboard(const struct device *d);
+static int kbd_open_device(struct device *d);
+static void kbd_close_device(struct device *d);
+
 static int hidraw_ready(struct device *d)
 {
     struct iface *f;
@@ -126,9 +130,15 @@ static void handle_device(struct device *d)
     bool bound, in_use = false;
     int vc;
 
-    if (d->active)
+    if (d->active || d->kbd)
         return;
     if (d->failed && time(NULL) < d->retry_after)
+        return;
+
+    /* With the keyboard fast path enabled, only keyboards are claimed here.
+     * Mice, gamepads and other HID devices stay on usbip-host and are
+     * exported raw by bind_pass(). */
+    if (g_cfg.keyboard && !device_has_keyboard(d))
         return;
 
     snprintf(path, sizeof(path), USBIP_HOST "/%s", d->busid);
@@ -180,6 +190,49 @@ static void handle_device(struct device *d)
         d->wait_since = time(NULL);
         d->wait_logged = false;
         return;                        /* hidraw appears on the next pass */
+    }
+
+    /* Keyboards bypass USB/IP entirely: evdev -> TCP -> uinput.  Keeping the
+     * device on usbhid gives us the kernel's own HID parsing and autorepeat. */
+    if (g_cfg.keyboard && !d->kbd_no && device_has_keyboard(d)) {
+        time_t now;
+
+        if (opt_dry_run) {
+            if (!d->wait_logged) {
+                log_info("dry-run: would use the keyboard fast path for %s "
+                         "(%s:%s)", d->busid, d->vid, d->pid);
+                d->wait_logged = true;
+            }
+            return;
+        }
+        if (!d->claimed)
+            claim_device(d, "keyboard fast path");
+        if (kbd_open_device(d) == 0) {
+            d->kbd = true;
+            d->wait_since = 0;
+            d->wait_logged = false;
+            return;
+        }
+        now = time(NULL);
+        if (now - d->last_probe >= PROBE_INTERVAL_SEC) {
+            probe_interfaces(d);
+            d->last_probe = now;
+        }
+        if (!d->wait_logged) {
+            log_info("%s: waiting for the evdev keyboard node", d->busid);
+            d->wait_logged = true;
+        }
+        if (!d->wait_since)
+            d->wait_since = now;
+        if (now - d->wait_since > KBD_WAIT_TIMEOUT_SEC) {
+            log_warn("%s: no evdev keyboard after %ds, exporting raw",
+                     d->busid, KBD_WAIT_TIMEOUT_SEC);
+            unclaim_device(d);
+            d->kbd_no = true;
+            d->wait_since = 0;
+            d->wait_logged = false;
+        }
+        return;
     }
 
     /* budget check before claiming anything new */
@@ -262,6 +315,10 @@ static void drop_device(struct device *d)
 {
     bool was_active = d->active;
 
+    if (d->kbd) {
+        kbd_close_device(d);
+        d->kbd = false;
+    }
     teardown_gadget(d);
     unclaim_device(d);
     if (was_active && d->bad) {
@@ -302,7 +359,7 @@ static void scan(void)
          * and a realpath per device).  A uevent forces a full pass, so the
          * periodic pass only has to notice disappearances. */
         dev = device_find(e->d_name);
-        if (!g_force_full_scan && dev && dev->active) {
+        if (!g_force_full_scan && dev && (dev->active || dev->kbd)) {
             dev->seen = true;
             continue;
         }

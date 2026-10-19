@@ -33,6 +33,7 @@ static void shutdown_cleanup(void)
     }
     devices = NULL;
     write_claim_file();
+    kbd_shutdown();
 }
 
 static void usage(FILE *out)
@@ -131,6 +132,11 @@ int main(int argc, char **argv)
         cleanup_stale_gadgets();
     }
 
+    if (!opt_dry_run) {
+        tune_auto();
+        kbd_init();
+    }
+
     log_info("starting (%s)%s", conf, opt_dry_run ? " [dry-run]" : "");
 
     sigemptyset(&mask);
@@ -152,6 +158,7 @@ int main(int argc, char **argv)
         struct signalfd_siginfo si;
         int timeout, i, idx, nfds;
         int64_t loop_now;
+        struct kbd_dev *k;
 
         if (now_ms() >= next_scan) {
             bool full = g_force_full_scan;
@@ -173,6 +180,12 @@ int main(int argc, char **argv)
 
         nfds = (sigfd >= 0) ? 1 : 0;
         if (uevfd >= 0)
+            nfds++;
+        if (kbd_listen_fd >= 0)
+            nfds++;
+        if (kbd_client_fd >= 0)
+            nfds++;
+        for (k = kbd_devs; k; k = k->next)
             nfds++;
         for (struct device *d = devices; d; d = d->next) {
             if (!d->active)
@@ -217,6 +230,29 @@ int main(int argc, char **argv)
             map[idx] = NULL;
             idx++;
         }
+        if (kbd_listen_fd >= 0) {
+            fds[idx].fd = kbd_listen_fd;
+            fds[idx].events = POLLIN;
+            fds[idx].revents = 0;
+            map[idx] = NULL;
+            idx++;
+        }
+        if (kbd_client_fd >= 0) {
+            fds[idx].fd = kbd_client_fd;
+            fds[idx].events = POLLIN;
+            if (kbd_out_len > 0)
+                fds[idx].events |= POLLOUT;
+            fds[idx].revents = 0;
+            map[idx] = NULL;
+            idx++;
+        }
+        for (k = kbd_devs; k; k = k->next) {
+            fds[idx].fd = k->fd;
+            fds[idx].events = POLLIN;
+            fds[idx].revents = 0;
+            map[idx] = NULL;
+            idx++;
+        }
         for (struct device *d = devices; d; d = d->next) {
             if (!d->active)
                 continue;
@@ -251,6 +287,16 @@ int main(int argc, char **argv)
             struct iface *f = map[i];
 
             if (fds[i].revents == 0)
+                continue;
+            if (fds[i].fd == kbd_listen_fd) {
+                kbd_accept();
+                continue;
+            }
+            if (fds[i].fd == kbd_client_fd) {
+                kbd_client_event(fds[i].revents);
+                continue;
+            }
+            if (kbd_dispatch_fd(fds[i].fd))
                 continue;
             if (!f) {
                 if (fds[i].fd == uevfd) {
@@ -313,6 +359,7 @@ int main(int argc, char **argv)
                     next_scan = t;
             }
         }
+        kbd_service();
     }
 
     shutdown_cleanup();

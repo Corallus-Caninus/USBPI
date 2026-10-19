@@ -22,8 +22,10 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <glob.h>
 #include <limits.h>
 #include <poll.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -32,12 +34,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/mount.h>
+#include <sys/resource.h>
 #include <sys/signalfd.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+
+#include <linux/input.h>
 #include <linux/netlink.h>
 #include <time.h>
 #include <unistd.h>
@@ -45,6 +54,7 @@
 #include <linux/hidraw.h>
 
 #include "configuration.c"
+#include "shared/usbpi_wire.c"
 
 #include "usbpi_log.c"
 #include "usbpi_config.c"
@@ -55,4 +65,5 @@
 #include "usbpi_bind.c"
 #include "usbpi_scan.c"
 #include "usbpi_kbd.c"
+#include "usbpi_tune.c"
 #include "usbpi_main.c"

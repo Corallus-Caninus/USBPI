@@ -39,6 +39,8 @@ struct device {
     bool seen;
     bool claimed;
     bool active;
+    bool kbd;                    /* handled by the keyboard fast path */
+    bool kbd_no;                 /* not a real keyboard: export raw */
     bool bad;                    /* teardown and stop mirroring this device */
     bool failed;
     time_t retry_after;

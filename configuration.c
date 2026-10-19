@@ -68,6 +68,7 @@
 #define STUCK_RETRY_SEC         3600
 #define PROBE_INTERVAL_SEC      5
 #define WAIT_TIMEOUT_SEC        20
+#define KBD_WAIT_TIMEOUT_SEC    5
 #define CLAIM_RECHECK_MS        1000
 #define BIND_INTERVAL_MS        5000
 #define UEVENT_BUF_MAX          4096
@@ -83,11 +84,23 @@
 /* ------------------------------------------------------------------ */
 #define KBD_MAGIC               0x55534250u
 #define KBD_VERSION             1
+#define KBD_PKT_HELLO           1
+#define KBD_PKT_ACK             2
+#define KBD_PKT_EVENTS          3
+#define KBD_PKT_SNAPSHOT        4
+#define KBD_PKT_GAP             5
+#define KBD_FLAG_RELEASED       0x00000001u
+#define KBD_FLAG_GAP            0x00000002u
+#define KBD_HDR_LEN             32
+#define KBD_EV_WIRE_LEN         8
 #define KBD_RING_EVENTS         4096
 #define KBD_MAX_EVENTS_PKT      16
 #define KBD_MAX_PKT             512
 #define KBD_KEY_BYTES           ((KEY_MAX + 8) / 8)
 #define KBD_MAX_CLIENT_BUF      (KBD_MAX_PKT * 4)
+#define KBD_CLIENT_OUTBUF       (64 * 1024)
+#define KBD_CLIENT_INBUF        (4 * 1024)
+#define KBD_GRAB                1
 
 /* ------------------------------------------------------------------ */
 /* keyboard fast path: timing (milliseconds)                           */
@@ -127,7 +140,7 @@
 #define UINPUT_NAME             "USBPI remote keyboard"
 #define UINPUT_VENDOR           0x1d6b
 #define UINPUT_PRODUCT          0x0104
-#define UINPUT_VERSION          0x0100
+#define USBPI_UINPUT_VERSION    0x0100
 #define CLIENT_CMD_MAX          4096
 #define CLIENT_READ_MAX         8192
 

@@ -4,6 +4,7 @@
 
 struct config {
     bool enabled;
+    bool keyboard;
     unsigned queue_limit;
     int rescan_ms;
     char exclude[MAX_EXCLUDE][16];   /* "vvvv:pppp", lower case */
@@ -45,6 +46,7 @@ static void load_config(const char *path, struct config *cfg)
 
     memset(cfg, 0, sizeof(*cfg));
     cfg->enabled = true;
+    cfg->keyboard = true;
     cfg->queue_limit = DEFAULT_QUEUE;
     cfg->rescan_ms = DEFAULT_RESCAN_MS;
 
@@ -80,6 +82,8 @@ static void load_config(const char *path, struct config *cfg)
 
         if (!strcmp(key, "enabled")) {
             cfg->enabled = atoi(val) != 0;
+        } else if (!strcmp(key, "keyboard")) {
+            cfg->keyboard = atoi(val) != 0;
         } else if (!strcmp(key, "queue_limit")) {
             long v = atol(val);
 

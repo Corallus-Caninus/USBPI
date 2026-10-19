@@ -86,8 +86,8 @@ static int fill_iface(struct iface *f, const char *ifname)
         return -1;
     f->protocol = (int)v;
 
-    f->is_keyboard = (f->subclass == 1 &&
-                      (f->protocol == 1 || f->protocol == 2));
+    /* HID boot protocol: 1 = keyboard, 2 = mouse. */
+    f->is_keyboard = (f->subclass == 1 && f->protocol == 1);
     return 0;
 }
 

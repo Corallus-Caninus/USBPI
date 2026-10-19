@@ -10,6 +10,7 @@ Type=simple
 ExecStart=/usr/sbin/usbipd -e -t 3241
 Restart=always
 RestartSec=2
+Nice=-5
 
 [Install]
 WantedBy=multi-user.target

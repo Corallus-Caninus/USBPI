@@ -1,11 +1,8 @@
 # USBPI client - NixOS module
 #
 # Attaches USB devices exported by a remote USB/IP server (e.g. the
-# Raspberry Pi "usbip-pi" appliance) and keeps them attached.
-#
-# The usbip userspace tool is built from the kernel source that this system
-# actually runs, so it always matches the running vhci-hcd driver.  (NixOS
-# 24.11 does not package usbip yet.)
+# Raspberry Pi "usbip-pi" appliance), and receives keyboards over the
+# low-latency uinput fast path.
 #
 # Usage, in /etc/nixos/configuration.nix:
 #
@@ -19,7 +16,6 @@
 #   };
 #
 # Then: nixos-rebuild switch
-# The device is attached on boot and re-attached automatically if it drops.
 { config, lib, pkgs, ... }:
 
 let
@@ -54,8 +50,46 @@ let
     };
   };
 
-  # single source of truth: the same script you can run by hand
-  attachScript = pkgs.writeShellScript "usbip-sync" (builtins.readFile ./usbip-sync.sh);
+  # Single C client (attach/detach/watch/keyd), built by build.sh.
+  usbpi = pkgs.stdenv.mkDerivation {
+    pname = "usbpi";
+    version = "0.1";
+
+    src = lib.cleanSourceWith {
+      src = ../.;
+      filter = path: type:
+        let base = baseNameOf path;
+        in !(base == "build" || base == "result"
+             || base == ".git" || lib.hasPrefix "usbip-pi.img" base);
+    };
+
+    nativeBuildInputs = [ pkgs.gcc ];
+    dontConfigure = true;
+    doCheck = false;
+    buildPhase = ''
+      bash ./build.sh client
+    '';
+    installPhase = ''
+      install -Dm755 build/usbpi $out/bin/usbpi
+    '';
+
+    meta = {
+      description = "USBPI client (USB/IP attach + keyboard fast path)";
+      platforms = lib.platforms.linux;
+    };
+  };
+
+  commonEnv = {
+    USBIP_SERVER = cfg.server;
+    USBIP_BUSID = lib.optionalString (cfg.busid != null) cfg.busid;
+    USBIP_VIDPID = lib.optionalString (cfg.vidPid != null) cfg.vidPid;
+    USBIP_ALL = if cfg.all then "1" else "0";
+    USBIP_INTERVAL = toString cfg.interval;
+    USBIP_GADGET = if cfg.gadget then "1" else "0";
+    USBIP_GADGET_PORT = toString cfg.gadgetPort;
+  };
+
+  servicePath = [ usbip pkgs.kmod pkgs.avahi pkgs.glibc.bin pkgs.coreutils ];
 in
 {
   options.services.usbipClient = {
@@ -90,13 +124,19 @@ in
     gadget = lib.mkOption {
       type = lib.types.bool;
       default = true;
-      description = "Also attach the buffered HID gadgets exported by the server's HID mirror (device-mode usbipd).";
+      description = "Also attach the buffered HID gadgets exported by the server's legacy gadget port.";
     };
 
     gadgetPort = lib.mkOption {
       type = lib.types.port;
       default = 3241;
       description = "TCP port of the server's device-mode usbipd that exports buffered HID gadgets.";
+    };
+
+    keyboard = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Run the keyboard fast-path daemon (uinput). Disable to use plain USB/IP for keyboards.";
     };
 
     interval = lib.mkOption {
@@ -107,30 +147,48 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    boot.kernelModules = [ "vhci-hcd" ];
+    boot.kernelModules = [ "vhci-hcd" "uinput" ];
 
-    environment.systemPackages = [ usbip ];
+    environment.systemPackages = [ usbip usbpi ];
 
     systemd.services.usbip-attach = {
-      description = "Attach USB device(s) exported by ${cfg.server}";
+      description = "Attach USB devices exported by ${cfg.server}";
       wants = [ "network-online.target" ];
       after = [ "network-online.target" ];
       wantedBy = [ "multi-user.target" ];
-      path = [ usbip pkgs.kmod pkgs.avahi pkgs.glibc.bin pkgs.coreutils pkgs.gnused pkgs.gnugrep pkgs.gawk ];
+      path = servicePath;
+      environment = commonEnv;
+      serviceConfig = {
+        Type = "simple";
+        ExecStart = "${usbpi}/bin/usbpi watch";
+        Restart = "always";
+        RestartSec = "5s";
+        Nice = -10;
+        IOSchedulingClass = "realtime";
+        LimitMEMLOCK = "infinity";
+      };
+    };
+
+    systemd.services.usbip-keyd = lib.mkIf cfg.keyboard {
+      description = "USBPI keyboard fast path from ${cfg.server}";
+      wants = [ "network-online.target" ];
+      after = [ "network-online.target" ];
+      wantedBy = [ "multi-user.target" ];
+      path = servicePath;
       environment = {
         USBIP_SERVER = cfg.server;
-        USBIP_BUSID = lib.optionalString (cfg.busid != null) cfg.busid;
-        USBIP_VIDPID = lib.optionalString (cfg.vidPid != null) cfg.vidPid;
-        USBIP_ALL = lib.optionalString cfg.all "1";
-        USBIP_INTERVAL = toString cfg.interval;
-        USBIP_GADGET = if cfg.gadget then "1" else "0";
-        USBIP_GADGET_PORT = toString cfg.gadgetPort;
       };
       serviceConfig = {
         Type = "simple";
-        ExecStart = attachScript;
+        ExecStart = "${usbpi}/bin/usbpi keyd";
         Restart = "always";
-        RestartSec = "5s";
+        RestartSec = "2s";
+        Nice = -10;
+        CPUSchedulingPolicy = "fifo";
+        CPUSchedulingPriority = 40;
+        IOSchedulingClass = "realtime";
+        LimitRTPRIO = 99;
+        LimitMEMLOCK = "infinity";
       };
     };
   };
