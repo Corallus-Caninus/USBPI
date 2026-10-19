@@ -59,6 +59,8 @@
 #define RESCAN_MIN_MS     200
 #define DEFAULT_QUEUE     65536
 #define RETRY_FAILED_SEC  60
+#define PROBE_INTERVAL_SEC 5    /* re-probe interfaces while waiting for hidraw */
+#define WAIT_TIMEOUT_SEC  20    /* give up and re-export raw if hidraw never comes */
 #define PBUF              (PATH_MAX + 128)
 
 /* ------------------------------------------------------------------ */
@@ -354,6 +356,8 @@ struct device {
     bool failed;
     time_t retry_after;
     bool wait_logged;
+    time_t last_probe;           /* last usbhid re-probe attempt */
+    time_t wait_since;           /* when we started waiting for hidraw */
     char busid[64];
     char dir[PATH_MAX];
     char vid[8];
@@ -865,19 +869,31 @@ static int vudc_count(void)
 /* gadget setup / teardown                                             */
 /* ------------------------------------------------------------------ */
 
-static void hidg_path_for_minor(const char *function_dir, char *out,
-                                size_t outsz)
+/*
+ * Resolve the /dev/hidgN node backing a configfs HID function.  The function's
+ * `dev` attribute holds "major:minor" and is populated as soon as the function
+ * is created, before the gadget is bound.  Build that attribute path in a PBUF
+ * buffer: a 64-byte buffer truncates it for long busids and silently yields
+ * "/dev/hidg?", which only fails after the UDC has already been bound.
+ */
+static int hidg_path_for_minor(const char *function_dir, char *out,
+                               size_t outsz, const char *busid)
 {
-    char buf[64], *colon;
+    char path[PBUF], buf[64], *colon;
 
     snprintf(out, outsz, "%s", "/dev/hidg?");
-    snprintf(buf, sizeof(buf), "%s/dev", function_dir);
-    if (read_text(buf, buf, sizeof(buf)) < 0)
-        return;
+    snprintf(path, sizeof(path), "%s/dev", function_dir);
+    if (read_text(path, buf, sizeof(buf)) < 0) {
+        log_err("%s: cannot read %s: %s", busid, path, strerror(errno));
+        return -1;
+    }
     colon = strchr(buf, ':');
-    if (!colon)
-        return;
+    if (!colon) {
+        log_err("%s: %s is not \"major:minor\" (\"%s\")", busid, path, buf);
+        return -1;
+    }
     snprintf(out, outsz, "/dev/hidg%lu", strtoul(colon + 1, NULL, 10));
+    return 0;
 }
 
 static int open_hidg_wait(const char *path, int timeout_ms)
@@ -1007,7 +1023,9 @@ static int setup_gadget(struct device *d)
         if (symlink(fdir, gen_path("%s/hid.usb%d", d->c1, f->ifnum)) < 0 &&
             errno != EEXIST)
             goto fail;
-        hidg_path_for_minor(fdir, f->hidg, sizeof(f->hidg));
+        if (hidg_path_for_minor(fdir, f->hidg, sizeof(f->hidg),
+                                d->busid) < 0)
+            goto fail;
     }
 
     if (pick_udc(d->udc, sizeof(d->udc)) < 0) {
@@ -1261,6 +1279,20 @@ static int load_report_info(struct device *d)
     return 0;
 }
 
+/*
+ * Sysfs unbind does not re-run driver matching, so a device we took from
+ * usbip-host is left without an owner until something probes it again.
+ * Writing each interface name to the bus's drivers_probe attribute makes the
+ * usbhid driver bind it, which is what creates the hidraw nodes we need.
+ */
+static void probe_interfaces(struct device *d)
+{
+    int i;
+
+    for (i = 0; i < d->nifaces; i++)
+        write_text("/sys/bus/usb/drivers_probe", d->ifaces[i].ifname);
+}
+
 static void handle_device(struct device *d)
 {
     char path[PBUF], st[16];
@@ -1275,9 +1307,15 @@ static void handle_device(struct device *d)
     snprintf(path, sizeof(path), USBIP_HOST "/%s", d->busid);
     bound = exists(path);
     if (bound) {
+        int n;
+
         snprintf(path, sizeof(path), USBIP_HOST "/%s/usbip_status",
                  d->busid);
-        if (read_text(path, st, sizeof(st)) == 0 && atoi(st) == 2)
+        /* status 2 means a usbip client is using the device: never yank it
+         * out from under them.  If the status cannot be read at all, stay
+         * conservative and leave the device alone as well. */
+        n = read_text(path, st, sizeof(st));
+        if (n < 0 || atoi(st) == 2)
             in_use = true;
     }
 
@@ -1310,6 +1348,9 @@ static void handle_device(struct device *d)
             return;
         }
         log_info("%s: unbound from usbip-host, usbhid takes over", d->busid);
+        probe_interfaces(d);
+        d->last_probe = time(NULL);
+        d->wait_since = time(NULL);
         d->wait_logged = false;
         return;                        /* hidraw appears on the next pass */
     }
@@ -1342,13 +1383,36 @@ static void handle_device(struct device *d)
     }
 
     if (hidraw_ready(d) < 0 || load_report_info(d) < 0) {
+        time_t now = time(NULL);
+
+        if (now - d->last_probe >= PROBE_INTERVAL_SEC) {
+            probe_interfaces(d);
+            d->last_probe = now;
+        }
         if (!d->wait_logged) {
             log_info("%s: waiting for all HID interfaces to be ready",
                      d->busid);
             d->wait_logged = true;
         }
+        if (d->claimed) {
+            /* we already unbound usbip-host; if usbhid never comes up the
+             * device would be stranded, so re-export it on this timeout */
+            if (!d->wait_since)
+                d->wait_since = now;
+            if (now - d->wait_since > WAIT_TIMEOUT_SEC) {
+                log_warn("%s: HID interfaces did not appear after %ds, "
+                         "re-exporting on usbip-host", d->busid,
+                         WAIT_TIMEOUT_SEC);
+                unclaim_device(d);
+                d->failed = true;
+                d->retry_after = now + RETRY_FAILED_SEC;
+                d->wait_since = 0;
+                d->wait_logged = false;
+            }
+        }
         return;
     }
+    d->wait_since = 0;
 
     if (opt_dry_run) {
         if (!d->wait_logged) {
