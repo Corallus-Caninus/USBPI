@@ -318,6 +318,8 @@ static bool is_excluded(const struct config *cfg, const char *vid,
 /* device model                                                        */
 /* ------------------------------------------------------------------ */
 
+static int64_t now_ms(void);
+
 struct iface {
     char ifname[64];             /* e.g. "1-1.3:1.0" */
     int ifnum;
@@ -331,6 +333,7 @@ struct iface {
     unsigned int report_len;     /* bytes per report, including report ID */
     int raw_fd;
     int g_fd;
+    int64_t g_retry_at;          /* do not poll g_fd for write before this */
     bool bad;                    /* too-long report seen; device must go */
     /* bounded report queue (absolute-state reports only) */
     unsigned char *q;
@@ -619,14 +622,17 @@ static int queue_pop_write(struct iface *f)
     if (n < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
             return -1;
-        if (errno == ESHUTDOWN) {
-            /* no client attached: keep buffering */
+        if (errno == ESHUTDOWN || errno == ENODEV) {
+            /* No client attached: keep buffering.  Back off before touching
+             * the gadget again; a detached hidg node reports POLLOUT
+             * continuously and an unthrottled retry would spin at 100% CPU. */
             if (!f->detached_logged) {
                 log_info("%s: client detached (%s), buffering locally",
                          f->ifname, strerror(errno));
                 f->detached_logged = true;
             }
             f->attached_hint = false;
+            f->g_retry_at = now_ms() + 100;
             return -1;
         }
         mark_iface_bad(f, strerror(errno));
@@ -1674,12 +1680,14 @@ int main(int argc, char **argv)
     while (!stop_requested) {
         struct signalfd_siginfo si;
         int timeout, i, idx, nfds;
+        int64_t loop_now;
 
         if (now_ms() >= next_scan) {
             scan();
             next_scan = now_ms() + g_cfg.rescan_ms;
         }
-        timeout = (int)(next_scan - now_ms());
+        loop_now = now_ms();
+        timeout = (int)(next_scan - loop_now);
         if (timeout < 0)
             timeout = 0;
 
@@ -1687,9 +1695,20 @@ int main(int argc, char **argv)
         for (struct device *d = devices; d; d = d->next) {
             if (!d->active)
                 continue;
-            for (i = 0; i < d->nifaces; i++)
-                if (d->ifaces[i].raw_fd >= 0 && d->ifaces[i].g_fd >= 0)
-                    nfds += 2;
+            for (i = 0; i < d->nifaces; i++) {
+                struct iface *f = &d->ifaces[i];
+
+                if (f->raw_fd >= 0)
+                    nfds++;
+                if (f->g_fd >= 0) {
+                    if (f->g_retry_at <= loop_now) {
+                        nfds++;
+                    } else if ((int)(f->g_retry_at - loop_now) < timeout) {
+                        /* wake up when the gadget backoff expires */
+                        timeout = (int)(f->g_retry_at - loop_now);
+                    }
+                }
+            }
         }
         if (nfds > cap) {
             cap = nfds + 16;
@@ -1715,18 +1734,20 @@ int main(int argc, char **argv)
             for (i = 0; i < d->nifaces; i++) {
                 struct iface *f = &d->ifaces[i];
 
-                if (f->raw_fd < 0 || f->g_fd < 0)
-                    continue;
-                fds[idx].fd = f->raw_fd;
-                fds[idx].events = POLLIN;
-                fds[idx].revents = 0;
-                map[idx] = f;
-                idx++;
-                fds[idx].fd = f->g_fd;
-                fds[idx].events = POLLOUT;
-                fds[idx].revents = 0;
-                map[idx] = f;
-                idx++;
+                if (f->raw_fd >= 0) {
+                    fds[idx].fd = f->raw_fd;
+                    fds[idx].events = POLLIN;
+                    fds[idx].revents = 0;
+                    map[idx] = f;
+                    idx++;
+                }
+                if (f->g_fd >= 0 && f->g_retry_at <= loop_now) {
+                    fds[idx].fd = f->g_fd;
+                    fds[idx].events = POLLOUT;
+                    fds[idx].revents = 0;
+                    map[idx] = f;
+                    idx++;
+                }
             }
         }
 
@@ -1793,6 +1814,8 @@ int main(int argc, char **argv)
             if (fds[i].revents & (POLLERR | POLLHUP | POLLNVAL)) {
                 int64_t t = now_ms();
 
+                if (fds[i].events & POLLOUT)
+                    f->g_retry_at = t + 100;
                 if (t < next_scan)
                     next_scan = t;
             }

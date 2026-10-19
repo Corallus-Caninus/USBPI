@@ -139,15 +139,40 @@ all_ports() {
     "$USBIP" port 2>/dev/null | sed -n 's/^Port \([0-9][0-9]*\):.*/\1/p'
 }
 
-is_attached() {
-    local target="$1" ports
-    ports="$("$USBIP" port 2>/dev/null)" || ports=""
+# Remote busids already imported on this machine.  Recent usbip versions
+# print them at the end of the "-> usbip://host:port/<busid>" line.
+attached_busids() {
+    "$USBIP" port 2>/dev/null \
+        | sed -n 's#.*usbip://[^/]*/\([^ ]*\).*#\1#p'
+}
+
+# vendor:product pairs currently imported on this machine.
+attached_vidpids() {
+    "$USBIP" port 2>/dev/null \
+        | sed -n 's/.*(\([0-9a-fA-F][0-9a-fA-F]*:[0-9a-fA-F][0-9a-fA-F]*\)).*/\1/p' \
+        | tr 'A-F' 'a-f' | sort -u
+}
+
+# True when this remote busid is already imported.  Fall back to the device
+# id when the kernel/usbip version does not print the remote busid.
+is_attached_busid() {
+    local b="$1"
+    attached_busids | grep -qxF "$b" && return 0
     if [ -n "$VIDPID" ]; then
-        printf '%s\n' "$ports" | grep -qF "(${VIDPID})"
+        "$USBIP" port 2>/dev/null | grep -qF "($VIDPID)" && return 0
+    fi
+    return 1
+}
+
+is_attached() {
+    local target="$1"
+    if [ -n "$VIDPID" ]; then
+        "$USBIP" port 2>/dev/null | grep -qF "($VIDPID)"
         return $?
     fi
-    printf '%s\n' "$ports" | grep -qF "usbip://$target" \
-        || printf '%s\n' "$ports" | grep -qF "usbip://$SERVER_RAW"
+    # Without a device filter any imported port means the single target is
+    # already attached.  Do not re-attach it every cycle.
+    "$USBIP" port 2>/dev/null | grep -q '^Port '
 }
 
 # Detach imported ports that belong to us (used to clear a stale attachment
@@ -222,12 +247,32 @@ attach_one() { # host port busid
 }
 
 # attach every device a port currently exports; returns 0 if at least one
-# attach succeeded
+# attach succeeded.  Skips busids already imported and (optionally) devices
+# whose vendor:product was already imported from another port, so a raw and a
+# buffered gadget export of the same device are never attached twice.
 attach_port() { # host port
-    local t="$1" p="$2" b busids found=""
-    busids="$(remote_busids "$t" "$p")"
-    [ -n "$busids" ] || return 1
-    for b in $busids; do
+    local t="$1" p="$2" listing line b vp found=""
+    listing="$(list_remote "$t" "$p")" || listing=""
+    [ -n "$listing" ] || return 1
+    while IFS= read -r line; do
+        b="$(printf '%s\n' "$line" \
+            | sed -n "s/^[[:space:]]*\\(${BUSID_RE}\\):.*/\\1/p")"
+        [ -n "$b" ] || continue
+        found=1
+        if is_attached_busid "$b"; then
+            continue
+        fi
+        vp="$(printf '%s\n' "$line" \
+            | sed -n 's/.*(\([0-9a-fA-F][0-9a-fA-F]*:[0-9a-fA-F][0-9a-fA-F]*\)).*/\1/p' \
+            | tr 'A-F' 'a-f')"
+        if [ -n "$vp" ] && [ -n "${SKIP_VIDPIDS:-}" ]; then
+            case " $SKIP_VIDPIDS " in
+                *" $vp "*)
+                    log "skipping $b ($vp) from $t:$p: already attached via another port"
+                    continue
+                    ;;
+            esac
+        fi
         log "attaching $b from $t:$p"
         if attach_one "$t" "$p" "$b"; then
             log "attached $b from $t:$p"
@@ -235,7 +280,7 @@ attach_port() { # host port
         else
             log "attach failed ($b from $t:$p); will retry"
         fi
-    done
+    done <<< "$listing"
     [ -n "$found" ]
 }
 
@@ -268,10 +313,15 @@ while true; do
 
         if [ -n "$ALL" ]; then
             any=""
-            attach_port "$target" "$PORT" && any=1
+            SKIP_VIDPIDS=""
+            # Buffered gadgets first: if a device is exported both raw and as
+            # a gadget, the raw copy is skipped below.
             if gadget_enabled; then
                 attach_port "$target" "$GADGET_PORT" && any=1
+                SKIP_VIDPIDS="$(attached_vidpids | tr '\n' ' ')"
             fi
+            attach_port "$target" "$PORT" && any=1
+            SKIP_VIDPIDS=""
             if [ -z "$any" ]; then
                 [ "$state" = "idle" ] || log "no devices exported by $target yet"
                 state="idle"
